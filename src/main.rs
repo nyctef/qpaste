@@ -1,18 +1,19 @@
 use axum::{
     Router,
+    body::Body,
     extract::{DefaultBodyLimit, Multipart, Path, State},
-    http::StatusCode,
-    response::IntoResponse,
+    http::{StatusCode, header},
+    response::{IntoResponse, Response},
     routing::{get, post},
 };
 use rand::distr::{Alphanumeric, SampleString};
-use regex;
-use std::env;
+use std::{env, io::ErrorKind, sync::Arc};
 use tokio::io::AsyncWriteExt;
+use tokio_util::io::ReaderStream;
 use tower_http::limit::RequestBodyLimitLayer;
 
 fn get_config() -> Config {
-    let addr = env::var("QPASTE_ADDR").unwrap_or("127.0.0.1:3000".to_string());
+    let addr = env::var("QPASTE_ADDR").unwrap_or_else(|_| "127.0.0.1:3000".to_string());
     // consider also accepting a pg db connection - fewer potential security vulns than storing files on disk
     let data_dir = env::var("QPASTE_DATA_DIR").expect("QPASTE_DATA_DIR must be set to store files");
     // ensure data_dir exists
@@ -22,7 +23,12 @@ fn get_config() -> Config {
 
 #[tokio::main]
 async fn main() {
-    let config = get_config();
+    async fn shutdown_signal() {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("Failed to install CTRL+C signal handler");
+    }
+    let config = Arc::new(get_config());
 
     let app = Router::new()
         .route("/", post(accept_form))
@@ -38,7 +44,10 @@ async fn main() {
 
     let listener = tokio::net::TcpListener::bind(&config.addr).await.unwrap();
     // tracing::debug!("listening on {}", listener.local_addr().unwrap());
-    axum::serve(listener, app).await.unwrap();
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await
+        .unwrap();
 }
 
 #[derive(Clone)]
@@ -48,9 +57,11 @@ struct Config {
 }
 
 async fn accept_form(
-    State(config): State<Config>,
+    State(config): State<Arc<Config>>,
     mut multipart: Multipart,
-) -> Result<(), (StatusCode, String)> {
+) -> Result<String, (StatusCode, String)> {
+    let mut ids = Vec::new();
+
     while let Some(mut field) = multipart
         .next_field()
         .await
@@ -66,7 +77,7 @@ async fn accept_form(
             .truncate(true)
             .open(file_path)
             .await
-            .map_err(|err| (StatusCode::BAD_REQUEST, err.to_string()))?;
+            .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
         while let Some(v) = field
             .chunk()
             .await
@@ -77,33 +88,65 @@ async fn accept_form(
                 .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
         }
 
-        println!("Wrote file with ID {}", &id);
+        println!("Wrote file with ID {}", id);
+        ids.push(id);
     }
-    Ok(())
+
+    Ok(format!("http://{}/f/{}", config.addr, ids.join("\n")))
 }
 
 async fn serve_file(
-    State(config): State<Config>,
+    State(config): State<Arc<Config>>,
     Path(file_id): Path<String>,
-) -> impl IntoResponse {
-    let file_id_re = regex::Regex::new(r"^[a-zA-Z0-9_-]+$").unwrap();
-
-    if !file_id_re.is_match(&file_id) {
-        return (axum::http::StatusCode::BAD_REQUEST, "Invalid file ID").into_response();
+) -> Result<Response, (StatusCode, String)> {
+    if !validate_file_id(&file_id) {
+        return Err((
+            axum::http::StatusCode::BAD_REQUEST,
+            "Invalid file ID".to_string(),
+        ));
     }
 
     let file_path = std::path::Path::new(&config.data_dir).join(&file_id);
 
-    if !file_path.exists() {
-        return (axum::http::StatusCode::NOT_FOUND, "File not found").into_response();
-    }
+    let file = match tokio::fs::File::open(&file_path).await {
+        Ok(file) => file,
+        Err(err) if err.kind() == ErrorKind::NotFound => {
+            Err((StatusCode::NOT_FOUND, "File not found".to_string()))?
+        }
+        Err(err) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to open file: {}", err),
+        ))?,
+    };
 
-    match tokio::fs::read(&file_path).await {
-        Ok(contents) => (axum::http::StatusCode::OK, contents).into_response(),
-        Err(_) => (
-            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-            "Failed to read file",
-        )
-            .into_response(),
-    }
+    let len = file
+        .metadata()
+        .await
+        .map_err(|err| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to get file metadata: {}", err),
+            )
+        })?
+        .len();
+
+    let body = Body::from_stream(ReaderStream::new(file));
+
+    Ok((
+        [
+            (header::CONTENT_TYPE, "application/octet-stream".to_string()),
+            (header::CONTENT_LENGTH, len.to_string()),
+            (header::X_CONTENT_TYPE_OPTIONS, "nosniff".to_string()),
+            (header::CONTENT_DISPOSITION, "attachment".to_string()),
+        ],
+        body,
+    )
+        .into_response())
+}
+
+fn validate_file_id(file_id: &str) -> bool {
+    file_id.len() == 7
+        && file_id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-')
 }
