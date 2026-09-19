@@ -18,3 +18,20 @@ all via environment variables:
 - no content validation. Content is served as-is with no processing or mime type sniffing, and consumers get axum's default content-type of `application/octet-stream`.
 - no rate-limiting. need to keep an eye on traffic; abuse or denial-of-service pretty likely if something malicious comes across the service.
 - internal server errors are logged directly to clients; not sure but this could end up exposing sensitive implementation details.
+
+
+## example usage
+
+```bash
+$ curl -F "file=@Cargo.toml" http://localhost:3000
+http://127.0.0.1:3000/f/Ne4-Sd8
+
+$ curl http://localhost:3000/f/Ne4-Sd8
+[package]
+name = "qpaste"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+...
+```
