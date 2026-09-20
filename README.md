@@ -34,7 +34,6 @@ or pull in the NixOS module from a system flake:
         {
           services.qpaste = {
             enable = true;
-            dataDir = "/var/lib/qpaste";
             addr = "0.0.0.0:3000";
             baseUrl = "https://paste.example.com";
           };

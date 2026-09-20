@@ -76,12 +76,6 @@
               '';
             };
 
-            dataDir = mkOption {
-              type = types.path;
-              default = "/var/lib/qpaste";
-              description = "Directory where uploaded pastes are stored.";
-            };
-
             openFirewall = mkOption {
               type = types.bool;
               default = false;
@@ -97,7 +91,7 @@
 
               environment = {
                 QPASTE_ADDR = cfg.addr;
-                QPASTE_DATA_DIR = cfg.dataDir;
+                QPASTE_DATA_DIR = "/var/lib/qpaste";
               }
               // optionalAttrs (cfg.baseUrl != null) {
                 QPASTE_BASE_URL = cfg.baseUrl;
@@ -107,7 +101,6 @@
                 ExecStart = "${cfg.package}/bin/qpaste";
                 DynamicUser = true;
                 StateDirectory = "qpaste";
-                ReadWritePaths = [ cfg.dataDir ];
                 Restart = "on-failure";
 
                 NoNewPrivileges = true;
