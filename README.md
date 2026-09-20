@@ -11,6 +11,40 @@ all via environment variables:
 | `QPASTE_BASE_URL` | `http://$QPASTE_ADDR` | the base url handed back to uploaders. set this if you're behind a reverse proxy or binding to `0.0.0.0`, otherwise the returned links won't be reachable. trailing slash is optional. |
 
 
+## flake usage
+
+run it directly:
+
+```bash
+$ nix run github:nyctef/qpaste -- # then set QPASTE_DATA_DIR etc as usual
+```
+
+or pull in the NixOS module from a system flake:
+
+```nix
+{
+  inputs.qpaste.url = "github:nyctef/qpaste";
+  inputs.qpaste.inputs.nixpkgs.follows = "nixpkgs";
+
+  outputs = { self, nixpkgs, qpaste, ... }: {
+    nixosConfigurations.myhost = nixpkgs.lib.nixosSystem {
+      system = "x86_64-linux";
+      modules = [
+        qpaste.nixosModules.default
+        {
+          services.qpaste = {
+            enable = true;
+            dataDir = "/var/lib/qpaste";
+            addr = "0.0.0.0:3000";
+            baseUrl = "https://paste.example.com";
+          };
+        }
+      ];
+    };
+  };
+}
+```
+
 ## security notes
 
 
