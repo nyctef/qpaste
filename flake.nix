@@ -91,6 +91,7 @@
 
               environment = {
                 QPASTE_ADDR = cfg.addr;
+                # managed by the StateDirectory setting below
                 QPASTE_DATA_DIR = "/var/lib/qpaste";
               }
               // optionalAttrs (cfg.baseUrl != null) {
